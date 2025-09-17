@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Gestor de Tickets</title>
+  <script src="https://qvibwekgwulygfcpribo.supabase.co
+"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
+    .card { background: #222; padding: 20px; margin: 15px auto; border-radius: 10px; max-width: 800px; }
+    button, input { padding: 10px; margin: 5px; border-radius: 5px; border: none; }
+    button { background: #00c853; color: white; cursor: pointer; }
+    button:hover { background: #009624; }
+    img { width: 200px; margin: 5px; border: 2px solid #444; border-radius: 6px; }
+    progress { width: 80%; margin: 10px auto; display: block; }
+  </style>
+</head>
+<body>
+  <h1>📷 Gestor de Tickets</h1>
+
+  <!-- Subir -->
+  <div class="card">
+    <h2>Subir ticket</h2>
+    <input type="file" id="fileInput" accept="image/*" multiple>
+    <button onclick="handleUpload()">Procesar</button>
+    <progress id="progressBar" value="0" max="100" style="display:none;"></progress>
+  </div>
+
+  <!-- Conteo -->
+  <div class="card">
+    <h2>📊 Conteo</h2>
+    <p>Originales: <span id="originales">0</span></p>
+    <p>Duplicados: <span id="duplicados">0</span></p>
+    <p>Total tickets: <span id="total">0</span></p>
+    <button onclick="exportarOriginales()">Exportar originales (ZIP)</button>
+  </div>
+
+  <!-- Galería -->
+  <div class="card">
+    <h2>🎟 Tickets guardados</h2>
+    <div id="imagenes"></div>
+  </div>
+
+  <script>
+    // 🚀 Conexión a Supabase
+    const SUPABASE_URL = "https://qvibwekgwulygfcpribo.supabase.co"; // <-- reemplaza
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF2aWJ3ZWtnd3VseWdmY3ByaWJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgxMzgxMTYsImV4cCI6MjA3MzcxNDExNn0.QTifawuU4MyLYOZKTJhSk8JQ1EjjoEOg7aRGvkn1gf0"; // <-- reemplaza
+    const supabaseClient = supabase.createClient(https://qvibwekgwulygfcpribo.supabase.co, eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF2aWJ3ZWtnd3VseWdmY3ByaWJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgxMzgxMTYsImV4cCI6MjA3MzcxNDExNn0.QTifawuU4MyLYOZKTJhSk8JQ1EjjoEOg7aRGvkn1gf0);
+
+    const bucket = "tickets"; // tu bucket en Supabase
+
+    // Hash simple (para detectar duplicados)
+    async function getHash(file) {
+      const buffer = await file.arrayBuffer();
+      const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    // Subir imágenes
+    async function handleUpload() {
+      const files = document.getElementById("fileInput").files;
+      if (!files.length) return;
+
+      const progressBar = document.getElementById("progressBar");
+      progressBar.style.display = "block";
+      progressBar.value = 0;
+
+      let procesados = 0;
+      for (let file of files) {
+        const hash = await getHash(file);
+        const fileName = `${hash}.jpg`;
+
+        // ¿Ya existe?
+        const { data: existing } = await supabaseClient
+          .storage.from(bucket)
+          .list("", { search: fileName });
+
+        if (existing && existing.length > 0) {
+          console.log("Duplicado detectado:", fileName);
+        } else {
+          await supabaseClient.storage.from(bucket).upload(fileName, file);
+        }
+
+        procesados++;
+        progressBar.value = (procesados / files.length) * 100;
+      }
+
+      listarImagenes();
+    }
+
+    // Listar imágenes
+    async function listarImagenes() {
+      const { data, error } = await supabaseClient.storage.from(bucket).list();
+      if (error) { console.error(error); return; }
+
+      const contenedor = document.getElementById("imagenes");
+      contenedor.innerHTML = "";
+
+      let originales = 0, duplicados = 0;
+      const vistos = new Set();
+
+      for (let file of data) {
+        const { data: urlData } = supabaseClient.storage.from(bucket).getPublicUrl(file.name);
+
+        // Detectar duplicado por nombre
+        if (vistos.has(file.name)) {
+          duplicados++;
+          continue;
+        } else {
+          vistos.add(file.name);
+          originales++;
+        }
+
+        const img = document.createElement("img");
+        img.src = urlData.publicUrl;
+        contenedor.appendChild(img);
+      }
+
+      document.getElementById("originales").innerText = originales;
+      document.getElementById("duplicados").innerText = duplicados;
+      document.getElementById("total").innerText = originales + duplicados;
+    }
+
+    // Exportar ZIP solo originales
+    async function exportarOriginales() {
+      const { data, error } = await supabaseClient.storage.from(bucket).list();
+      if (error) return console.error(error);
+
+      const zip = new JSZip();
+      const vistos = new Set();
+
+      for (let file of data) {
+        if (vistos.has(file.name)) continue;
+        vistos.add(file.name);
+
+        const { data: urlData } = supabaseClient.storage.from(bucket).getPublicUrl(file.name);
+        const response = await fetch(urlData.publicUrl);
+        const blob = await response.blob();
+        zip.file(file.name, blob);
+      }
+
+      const content = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(content);
+      a.download = "tickets.zip";
+      a.click();
+    }
+
+    // Cargar al inicio
+    listarImagenes();
+  </script>
+
+  <!-- Librería para exportar ZIP -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+</body>
+</html>
